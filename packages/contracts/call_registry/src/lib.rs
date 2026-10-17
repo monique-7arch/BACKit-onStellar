@@ -108,6 +108,33 @@ const MAX_CALL_PAGE_SIZE: u32 = 20;
 const MAX_CALL_STAKERS_PAGE_SIZE: u32 = 50;
 pub const CONTRACT_VERSION: u32 = 1;
 
+/// Granular circuit-breaker flags (SC-035). Withdrawals and refunds are never gated.
+pub const PAUSE_CREATION: u32 = 1;
+pub const PAUSE_STAKING: u32 = 2;
+pub const PAUSE_SETTLEMENT: u32 = 4;
+pub const PAUSE_ALL: u32 = PAUSE_CREATION | PAUSE_STAKING | PAUSE_SETTLEMENT;
+
+fn pause_flags_key(env: &Env) -> Symbol {
+    Symbol::new(env, "pause_flags")
+}
+
+fn pauser_key(env: &Env) -> Symbol {
+    Symbol::new(env, "pauser")
+}
+
+fn get_pause_flags(env: &Env) -> u32 {
+    env.storage().instance().get(&pause_flags_key(env)).unwrap_or(0)
+}
+
+/// Fails with [`CallRegistryError::ContractPaused`] if `flag` is currently paused.
+fn when_not_paused(env: &Env, flag: u32) -> Result<(), CallRegistryError> {
+    if get_pause_flags(env) & flag != 0 {
+        Err(CallRegistryError::ContractPaused)
+    } else {
+        Ok(())
+    }
+}
+
 /// CallRegistry contract implementation.
 /// Manages prediction calls and staking on market outcomes.
 #[contract]
@@ -235,6 +262,7 @@ impl CallRegistry {
         args: CallInitArgs,
     ) -> Result<Call, CallRegistryError> {
         creator.require_auth();
+        when_not_paused(&env, PAUSE_CREATION)?;
         reentrancy_guard!(&env);
 
         let CallInitArgs {
@@ -581,6 +609,7 @@ impl CallRegistry {
         position: u32,
     ) -> Result<Call, CallRegistryError> {
         staker.require_auth();
+        when_not_paused(&env, PAUSE_STAKING)?;
         reentrancy_guard!(&env);
 
         if amount <= 0 {
@@ -853,6 +882,35 @@ impl CallRegistry {
         admin::set_min_stake(env, new_min_stake);
     }
 
+    /// Designate the address allowed to set the pause flags (admin only).
+    pub fn set_pauser(env: Env, pauser: Address) -> Result<(), CallRegistryError> {
+        let config = get_config(&env).ok_or(CallRegistryError::NotInitialized)?;
+        config.admin.require_auth();
+        env.storage().instance().set(&pauser_key(&env), &pauser);
+        Ok(())
+    }
+
+    /// Replace the granular pause bitmask (SC-035). Callable by the admin or the
+    /// designated pauser; `0` unpauses everything. Takes effect immediately.
+    /// Creation, staking and settlement can be paused; refunds and withdrawals cannot.
+    pub fn set_pause_flags(env: Env, caller: Address, flags: u32) -> Result<(), CallRegistryError> {
+        caller.require_auth();
+        let config = get_config(&env).ok_or(CallRegistryError::NotInitialized)?;
+        let pauser: Option<Address> = env.storage().instance().get(&pauser_key(&env));
+        if caller != config.admin && pauser.as_ref() != Some(&caller) {
+            return Err(CallRegistryError::Unauthorized);
+        }
+        env.storage()
+            .instance()
+            .set(&pause_flags_key(&env), &(flags & PAUSE_ALL));
+        Ok(())
+    }
+
+    /// Current pause bitmask.
+    pub fn pause_flags(env: Env) -> u32 {
+        get_pause_flags(&env)
+    }
+
     /// Pause the contract (admin only).
     pub fn pause(env: Env) {
         admin::pause(env);
@@ -941,6 +999,7 @@ impl CallRegistry {
     ) -> Result<Call, CallRegistryError> {
         let config = get_config(&env).ok_or(CallRegistryError::NotInitialized)?;
         assert!(!config.paused, "Contract is paused");
+        when_not_paused(&env, PAUSE_SETTLEMENT)?;
         config.outcome_manager.require_auth();
         reentrancy_guard!(&env);
 
@@ -1011,6 +1070,7 @@ impl CallRegistry {
     /// * [`CallRegistryError::CallSettled`]     – call is already settled.
     pub fn mark_settled(env: Env, call_id: u64) -> Result<(), CallRegistryError> {
         let config = get_config(&env).ok_or(CallRegistryError::NotInitialized)?;
+        when_not_paused(&env, PAUSE_SETTLEMENT)?;
         config.outcome_manager.require_auth();
 
         let mut call = get_call(&env, call_id).ok_or(CallRegistryError::CallNotFound)?;

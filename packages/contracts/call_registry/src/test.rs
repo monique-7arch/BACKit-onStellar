@@ -1759,6 +1759,103 @@ mod call_registry {
         client.claim_void_refund(&non_staker, &call.id);
     }
 
+    // ── SC-035: granular circuit breaker ───────────────────────────────────────
+
+    #[test]
+    fn test_pause_staking_blocks_stake_but_not_refunds() {
+        let (env, client, admin, _om) = setup();
+        env.ledger().set_timestamp(1000);
+        let creator = Address::generate(&env);
+        let staker = Address::generate(&env);
+        let other = Address::generate(&env);
+        let (call, _) = make_call(&env, &client, &creator);
+        client.stake_on_call(&staker, &call.id, &50_000_000_i128, &1);
+
+        client.set_pause_flags(&admin, &crate::PAUSE_STAKING);
+        assert_eq!(client.pause_flags(), crate::PAUSE_STAKING);
+
+        let res = client.try_stake_on_call(&other, &call.id, &50_000_000_i128, &1);
+        assert_eq!(res, Err(Ok(CallRegistryError::ContractPaused)));
+
+        // User funds stay reachable while staking is paused.
+        client.void_call(&call.id);
+        client.claim_void_refund(&staker, &call.id);
+    }
+
+    #[test]
+    fn test_pause_creation_blocks_create_but_not_staking() {
+        let (env, client, admin, _om) = setup();
+        env.ledger().set_timestamp(1000);
+        let creator = Address::generate(&env);
+        let staker = Address::generate(&env);
+        let (call, stake_token) = make_call(&env, &client, &creator);
+
+        client.set_pause_flags(&admin, &crate::PAUSE_CREATION);
+
+        client.stake_on_call(&staker, &call.id, &50_000_000_i128, &1);
+        let args = crate::types::CallInitArgs {
+            stake_token,
+            stake_amount: 100_000_000_i128,
+            start_price: TEST_START_PRICE,
+            end_ts: 2000u64,
+            token_address: Address::generate(&env),
+            pair_id: Bytes::from_slice(&env, b"USDC/XLM"),
+            ipfs_cid: Bytes::from_slice(&env, b"cid"),
+            metadata_hash: BytesN::from_array(&env, &[0u8; 32]),
+            condition: ConditionType::TargetAbove(1),
+            outcome_count: 2,
+            gate_kind: None,
+            gate_min_account_age: 0,
+            gate_min_xlm_balance: 0,
+            gate_min_trustlines: 0,
+            gate_badge: None,
+        };
+        let res = client.try_create_call(&creator, &args);
+        assert_eq!(res, Err(Ok(CallRegistryError::ContractPaused)));
+    }
+
+    #[test]
+    fn test_pause_settlement_blocks_resolution_and_unpause_restores() {
+        let (env, client, admin, _om) = setup();
+        env.ledger().set_timestamp(1000);
+        let creator = Address::generate(&env);
+        let (call, _) = make_call(&env, &client, &creator);
+
+        client.set_pause_flags(&admin, &crate::PAUSE_SETTLEMENT);
+        assert_eq!(
+            client.try_resolve_call(&call.id, &1, &100),
+            Err(Ok(CallRegistryError::ContractPaused))
+        );
+        assert_eq!(
+            client.try_mark_settled(&call.id),
+            Err(Ok(CallRegistryError::ContractPaused))
+        );
+
+        client.set_pause_flags(&admin, &0);
+        assert_eq!(client.pause_flags(), 0);
+        assert_ne!(
+            client.try_resolve_call(&call.id, &1, &100),
+            Err(Ok(CallRegistryError::ContractPaused))
+        );
+    }
+
+    #[test]
+    fn test_pauser_role_can_set_flags_and_strangers_cannot() {
+        let (env, client, _admin, _om) = setup();
+        let pauser = Address::generate(&env);
+        let stranger = Address::generate(&env);
+        client.set_pauser(&pauser);
+
+        client.set_pause_flags(&pauser, &crate::PAUSE_ALL);
+        assert_eq!(client.pause_flags(), crate::PAUSE_ALL);
+
+        assert_eq!(
+            client.try_set_pause_flags(&stranger, &0),
+            Err(Ok(CallRegistryError::Unauthorized))
+        );
+        assert_eq!(client.pause_flags(), crate::PAUSE_ALL);
+    }
+
     // ── claim_expired_refund ──────────────────────────────────────────────────
 
     // cancel_call

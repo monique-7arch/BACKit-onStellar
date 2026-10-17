@@ -727,6 +727,32 @@ fn test_submit_duplicate_submission_fails() {
 }
 
 #[test]
+fn test_settlement_prunes_temporary_submission_entries() {
+    use crate::storage::TempKey;
+    let env = Env::default();
+    let (_admin, registry_id, oracle_secret, oracle_pubkey, client) = setup_single_oracle(&env);
+
+    let signed = SignedOutcome {
+        call_id: 9,
+        outcome: 1,
+        price: 100,
+        timestamp: 1000,
+        oracle_pubkey: oracle_pubkey.clone(),
+        signature: sign_outcome(&env, &oracle_secret, 9, 1, 100, 1000),
+    };
+    client.submit_outcome(&registry_id, &signed, &0u64);
+
+    // Quorum of one: the call settled, so its temporary markers are gone.
+    let still_there = env.as_contract(&client.address, || {
+        env.storage()
+            .temporary()
+            .has(&TempKey::Submission(oracle_pubkey.clone(), 9))
+    });
+    assert!(!still_there);
+    assert_eq!(client.get_outcome(&9).outcome, 1);
+}
+
+#[test]
 fn test_submit_invalid_outcome_fails() {
     let env = Env::default();
     let (_admin, registry_id, oracle_secret, oracle_pubkey, client) = setup_single_oracle(&env);

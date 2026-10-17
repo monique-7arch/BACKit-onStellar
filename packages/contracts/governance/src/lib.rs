@@ -2,15 +2,24 @@
 
 mod errors;
 mod events;
+pub mod pause;
+pub mod rbac;
 mod storage;
+pub mod timelock;
 mod types;
 
 #[cfg(test)]
 mod test;
 
 use errors::GovernanceError;
-use events::{emit_delegation, emit_proposal_created, emit_proposal_executed, emit_vote_cast};
-use soroban_sdk::{contract, contractimpl, Address, Env, Symbol, Vec};
+use events::{
+    emit_delegation, emit_pause_changed, emit_proposal_created, emit_proposal_executed,
+    emit_role_granted, emit_role_revoked, emit_vote_cast, emit_withdrawal_cancelled,
+    emit_withdrawal_executed, emit_withdrawal_proposed,
+};
+use rbac::Role;
+use soroban_sdk::{contract, contractimpl, token, Address, Env, Symbol, Vec};
+use timelock::{WithdrawalProposal, MIN_TIMELOCK_SECS};
 use storage::*;
 use types::{GovernanceConfig, Proposal, Vote};
 
@@ -34,6 +43,7 @@ impl Governance {
             return Err(GovernanceError::AlreadyInitialized);
         }
         admin.require_auth();
+        rbac::grant(&env, Role::Admin, &admin);
         let config = GovernanceConfig {
             admin,
             proposal_threshold_calls,
@@ -43,6 +53,7 @@ impl Governance {
             pass_threshold_bps,
         };
         set_config(&env, &config);
+        backit_shared::ttl::extend_instance(&env);
         Ok(())
     }
 
@@ -54,6 +65,7 @@ impl Governance {
     ) -> Result<u64, GovernanceError> {
         proposer.require_auth();
         let config = get_config(&env).ok_or(GovernanceError::NotInitialized)?;
+        pause::when_not_paused(&env, pause::PAUSE_CREATION)?;
 
         let reputation = Self::get_user_reputation(&env, &proposer);
         let accuracy = reputation.0;
@@ -141,6 +153,7 @@ impl Governance {
     pub fn execute_proposal(env: Env, caller: Address, proposal_id: u64) -> Result<(), GovernanceError> {
         caller.require_auth();
         let config = get_config(&env).ok_or(GovernanceError::NotInitialized)?;
+        pause::when_not_paused(&env, pause::PAUSE_SETTLEMENT)?;
         let mut proposal = get_proposal(&env, proposal_id).ok_or(GovernanceError::ProposalNotFound)?;
 
         if proposal.executed {
@@ -236,6 +249,131 @@ impl Governance {
         }
         set_user_reputation(&env, &user, resolved_calls, total_staked);
         Ok(())
+    }
+
+    // ── Roles (SC-034) ─────────────────────────────────────────────────────
+
+    /// Grant `role` to `account`. Only an Admin may do this; a role can have many holders.
+    pub fn grant_role(env: Env, caller: Address, role: Role, account: Address) -> Result<(), GovernanceError> {
+        rbac::require_role(&env, Role::Admin, &caller)?;
+        rbac::grant(&env, role, &account);
+        backit_shared::ttl::extend_instance(&env);
+        emit_role_granted(&env, role, &account, &caller);
+        Ok(())
+    }
+
+    /// Revoke `role` from `account`. Only an Admin may do this; an Admin cannot
+    /// revoke their own Admin role (use [`Self::transfer_role`]).
+    pub fn revoke_role(env: Env, caller: Address, role: Role, account: Address) -> Result<(), GovernanceError> {
+        rbac::require_role(&env, Role::Admin, &caller)?;
+        if role == Role::Admin && account == caller {
+            return Err(GovernanceError::CannotRevokeOwnAdmin);
+        }
+        rbac::revoke(&env, role, &account);
+        emit_role_revoked(&env, role, &account, &caller);
+        Ok(())
+    }
+
+    /// Move `role` from the caller to `to`. The caller must hold it and authorises the move.
+    pub fn transfer_role(env: Env, from: Address, role: Role, to: Address) -> Result<(), GovernanceError> {
+        rbac::require_role(&env, role, &from)?;
+        rbac::grant(&env, role, &to);
+        if from != to {
+            rbac::revoke(&env, role, &from);
+        }
+        emit_role_revoked(&env, role, &from, &from);
+        emit_role_granted(&env, role, &to, &from);
+        Ok(())
+    }
+
+    pub fn has_role(env: Env, role: Role, account: Address) -> bool {
+        rbac::has_role(&env, role, &account)
+    }
+
+    // ── Circuit breaker (SC-035) ───────────────────────────────────────────
+
+    /// Replace the pause bitmask. Only a Pauser may do this; `0` unpauses everything.
+    pub fn set_paused(env: Env, caller: Address, flags: u32) -> Result<(), GovernanceError> {
+        rbac::require_role(&env, Role::Pauser, &caller)?;
+        pause::set_flags(&env, flags & pause::PAUSE_ALL);
+        emit_pause_changed(&env, flags & pause::PAUSE_ALL, &caller);
+        Ok(())
+    }
+
+    pub fn paused_flags(env: Env) -> u32 {
+        pause::flags(&env)
+    }
+
+    // ── Timelocked treasury withdrawals (SC-033) ───────────────────────────
+
+    /// Propose moving `amount` of `token` out of this contract's treasury. It can
+    /// be executed no sooner than 48 hours later and cancelled until then.
+    pub fn propose_withdrawal(
+        env: Env,
+        proposer: Address,
+        token: Address,
+        amount: i128,
+        recipient: Address,
+    ) -> Result<u64, GovernanceError> {
+        rbac::require_role(&env, Role::Admin, &proposer)?;
+        if amount <= 0 {
+            return Err(GovernanceError::InvalidAmount);
+        }
+        let now = env.ledger().timestamp();
+        let executable_at = now + MIN_TIMELOCK_SECS;
+        let id = timelock::next_id(&env);
+        timelock::set(
+            &env,
+            &WithdrawalProposal {
+                id,
+                token: token.clone(),
+                amount,
+                recipient: recipient.clone(),
+                proposer,
+                proposed_at: now,
+                executable_at,
+                executed: false,
+                cancelled: false,
+            },
+        );
+        backit_shared::ttl::extend_instance(&env);
+        emit_withdrawal_proposed(&env, id, &token, amount, &recipient, executable_at);
+        Ok(id)
+    }
+
+    /// Execute a withdrawal once the timelock has elapsed.
+    pub fn execute_withdrawal(env: Env, caller: Address, id: u64) -> Result<(), GovernanceError> {
+        rbac::require_role(&env, Role::Admin, &caller)?;
+        let mut w = timelock::get(&env, id).ok_or(GovernanceError::WithdrawalNotFound)?;
+        if w.executed || w.cancelled {
+            return Err(GovernanceError::WithdrawalClosed);
+        }
+        if env.ledger().timestamp() < w.executable_at {
+            return Err(GovernanceError::TimelockNotElapsed);
+        }
+        w.executed = true;
+        timelock::set(&env, &w);
+        token::Client::new(&env, &w.token).transfer(&env.current_contract_address(), &w.recipient, &w.amount);
+        emit_withdrawal_executed(&env, id);
+        Ok(())
+    }
+
+    /// Cancel a pending withdrawal. Any Admin may cancel, so a malicious proposal
+    /// can be stopped by a single honest signer during the timelock.
+    pub fn cancel_withdrawal(env: Env, caller: Address, id: u64) -> Result<(), GovernanceError> {
+        rbac::require_role(&env, Role::Admin, &caller)?;
+        let mut w = timelock::get(&env, id).ok_or(GovernanceError::WithdrawalNotFound)?;
+        if w.executed || w.cancelled {
+            return Err(GovernanceError::WithdrawalClosed);
+        }
+        w.cancelled = true;
+        timelock::set(&env, &w);
+        emit_withdrawal_cancelled(&env, id, &caller);
+        Ok(())
+    }
+
+    pub fn get_withdrawal(env: Env, id: u64) -> Result<WithdrawalProposal, GovernanceError> {
+        timelock::get(&env, id).ok_or(GovernanceError::WithdrawalNotFound)
     }
 
     fn get_user_reputation(env: &Env, user: &Address) -> (u32, i128) {

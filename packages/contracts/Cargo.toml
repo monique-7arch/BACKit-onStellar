@@ -6,6 +6,7 @@ members = [
   "charity_markets",
   "contracts/hello-world",
   "dutch_auction",
+  "governance",
   "gas_station",
   "index_fund",
   "invariant_tests",

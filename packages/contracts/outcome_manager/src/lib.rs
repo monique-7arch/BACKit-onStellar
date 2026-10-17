@@ -665,6 +665,7 @@ impl OutcomeManager {
             .instance()
             .set(&InstanceKey::FinalOutcome(outcome.call_id), &outcome);
         storage::set_settled_at(env, outcome.call_id, env.ledger().timestamp());
+        Self::prune_temporary_entries(env, outcome.call_id);
 
         registry_resolve_call(
             env,
@@ -674,6 +675,30 @@ impl OutcomeManager {
             outcome.price,
         );
         emit_outcome_finalized(env, outcome.call_id, outcome.outcome, outcome.price);
+    }
+
+    /// Remove the per-oracle duplicate-submission markers and vote counters kept in
+    /// temporary storage for a call that has just settled (SC-036).
+    ///
+    /// After settlement `AlreadySettled` rejects any further submission, so these
+    /// entries can no longer affect behaviour; removing them reclaims their rent
+    /// instead of leaving them to expire. The permanent replay record stays.
+    fn prune_temporary_entries(env: &Env, call_id: u64) {
+        let votes: Vec<OracleVote> = env
+            .storage()
+            .persistent()
+            .get(&PersistentKey::Votes(call_id))
+            .unwrap_or_else(|| Vec::new(env));
+        for vote in votes.iter() {
+            env.storage()
+                .temporary()
+                .remove(&TempKey::Submission(vote.oracle.clone(), call_id));
+            let message = build_message(env, call_id, vote.outcome, vote.price, vote.timestamp);
+            let outcome_hash: BytesN<32> = env.crypto().sha256(&message).into();
+            env.storage()
+                .temporary()
+                .remove(&TempKey::VoteCount(outcome_hash, call_id));
+        }
     }
 
     /// Claim a pro-rata payout for a winning staker.
