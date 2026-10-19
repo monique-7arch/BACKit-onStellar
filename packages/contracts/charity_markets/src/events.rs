@@ -58,3 +58,10 @@ pub fn emit_stake_added(
         (call_id, staker.clone(), amount, outcome),
     );
 }
+
+pub fn emit_charity_donation_routed(env: &Env, market_id: u64, charity: &Address, amount: i128) {
+    env.events().publish(
+        ("charity_markets", "CharityDonationRouted"),
+        (market_id, charity.clone(), amount),
+    );
+}

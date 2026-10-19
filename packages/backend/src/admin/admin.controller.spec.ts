@@ -2,6 +2,8 @@ import { Test, TestingModule } from '@nestjs/testing';
 import { BadRequestException, NotFoundException } from '@nestjs/common';
 import { AdminController } from './admin.controller';
 import { AdminService } from './admin.service';
+import { IndexerDlqService } from './indexer-dlq.service';
+import { AdminGuard } from '../auth/guards/admin.guard';
 import { CallStatus } from '../calls/entities/call.entity';
 import { Reflector } from '@nestjs/core';
 
@@ -45,11 +47,12 @@ describe('AdminController', () => {
       controllers: [AdminController],
       providers: [
         { provide: AdminService, useValue: mockAdminService },
+        { provide: IndexerDlqService, useValue: {} },
         Reflector,
       ],
     })
       // Override guards so we don't need a real JWT in unit tests
-      .overrideGuard(require('../auth/guards/admin.guard').AdminGuard)
+      .overrideGuard(AdminGuard)
       .useValue({ canActivate: () => true })
       .compile();
 

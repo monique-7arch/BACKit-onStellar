@@ -11,6 +11,7 @@ mod test;
 use errors::CharityError;
 use events::{
     emit_charity_call_created, emit_charity_call_resolved, emit_charity_donation,
+    emit_charity_donation_routed,
     emit_stake_added,
 };
 use soroban_sdk::{contract, contractimpl, token, Address, Env, Map};
@@ -40,6 +41,18 @@ impl CharityMarkets {
         set_stake_token(&env, &stake_token);
     }
 
+    /// Add or remove a charity address from the whitelist (admin only).
+    pub fn set_charity_whitelisted(env: Env, charity: Address, allowed: bool) {
+        let admin = get_admin(&env)
+            .unwrap_or_else(|| soroban_sdk::panic_with_error!(&env, CharityError::NotInitialized));
+        admin.require_auth();
+        storage::set_charity_whitelisted(&env, &charity, allowed);
+    }
+
+    pub fn is_charity_whitelisted(env: Env, charity: Address) -> bool {
+        storage::is_charity_whitelisted(&env, &charity)
+    }
+
     pub fn create_charity_call(
         env: Env,
         creator: Address,
@@ -57,6 +70,13 @@ impl CharityMarkets {
 
         if charity_split_bps > 10_000 {
             return Err(CharityError::CharitySplitExceedsMax);
+        }
+        // Splits run from 1% (100 bps) to 100%.
+        if charity_split_bps < 100 {
+            return Err(CharityError::CharitySplitTooLow);
+        }
+        if !is_charity_whitelisted(&env, &charity_address) {
+            return Err(CharityError::CharityNotWhitelisted);
         }
         if call_params.stake_amount <= 0 {
             return Err(CharityError::InvalidStakeAmount);
@@ -234,6 +254,7 @@ impl CharityMarkets {
                 );
                 call.total_donated = charity_amount;
                 emit_charity_donation(&env, &call.creator, &call.charity_address, charity_amount);
+                emit_charity_donation_routed(&env, call_id, &call.charity_address, charity_amount);
             }
 
             transfer_token(
@@ -272,6 +293,7 @@ impl CharityMarkets {
             );
             call.total_donated = call.stake_amount;
             emit_charity_donation(&env, &call.creator, &call.charity_address, call.stake_amount);
+            emit_charity_donation_routed(&env, call_id, &call.charity_address, call.stake_amount);
 
             let winning_total =
                 call.outcome_stakes.get(final_outcome).unwrap_or(0);

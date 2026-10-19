@@ -15,4 +15,6 @@ pub enum CharityError {
     InvalidStakeAmount = 9,
     InvalidCallId = 10,
     ZeroPool = 11,
+    CharitySplitTooLow = 12,
+    CharityNotWhitelisted = 13,
 }

@@ -1048,6 +1048,16 @@ dependencies = [
 ]
 
 [[package]]
+name = "orderbook"
+version = "0.0.0"
+dependencies = [
+ "backit-shared",
+ "ed25519-dalek",
+ "rand",
+ "soroban-sdk",
+]
+
+[[package]]
 name = "outcome-manager"
 version = "0.0.0"
 dependencies = [
@@ -1236,6 +1246,16 @@ dependencies = [
  "proc-macro2",
  "quote",
  "syn 3.0.3",
+]
+
+[[package]]
+name = "reputation-nft"
+version = "0.0.0"
+dependencies = [
+ "backit-shared",
+ "ed25519-dalek",
+ "rand",
+ "soroban-sdk",
 ]
 
 [[package]]

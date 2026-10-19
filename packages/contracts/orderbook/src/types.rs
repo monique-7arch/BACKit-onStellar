@@ -20,6 +20,8 @@ pub struct Order {
     pub filled: i128,
     pub created_at: u64,
     pub active: bool,
+    /// Collateral still escrowed for an open bid (0 for asks).
+    pub escrow: i128,
 }
 
 #[contracttype]

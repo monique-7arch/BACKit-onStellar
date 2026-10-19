@@ -62,6 +62,23 @@ export class Users {
   @Column({ type: 'boolean', default: false })
   banned: boolean;
 
+  /** Rolling 30-day mean Brier score (BE-029). Lower is better. */
+  @Column({ type: 'double precision', default: 0 })
+  brierScore30d: number;
+
+  @Column({ type: 'double precision', default: 0 })
+  logLoss30d: number;
+
+  @Column({ type: 'int', default: 0 })
+  calibrationSampleSize: number;
+
+  /** Sybil / wash-stake flag (BE-035). Excluded from public leaderboards when true. */
+  @Column({ type: 'boolean', default: false })
+  sybilFlagged: boolean;
+
+  @Column({ type: 'double precision', default: 0 })
+  sybilCircularityScore: number;
+
   @CreateDateColumn()
   createdAt: Date;
 

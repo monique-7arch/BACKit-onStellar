@@ -6,11 +6,13 @@ import { Users } from '../user/entities/users.entity';
 import { AdminController } from './admin.controller';
 import { AdminService } from './admin.service';
 import { AuditModule } from '../audit/audit.module';
+import { IndexerDlqModule } from './indexer-dlq.module';
 
 @Module({
   imports: [
     TypeOrmModule.forFeature([Call, CallReport, Users]),
     AuditModule, // provides AuditInterceptor (registered as APP_INTERCEPTOR) and AuditService
+    IndexerDlqModule, // indexer dead-letter queue behind /admin/indexer/dlq
   ],
   controllers: [AdminController],
   providers: [AdminService],

@@ -9,6 +9,7 @@ pub enum DataKey {
     NextCallId,
     CharityCall(u64),
     UserStake(u64, Address, u32),
+    CharityWhitelist(Address),
 }
 
 pub fn set_admin(env: &Env, admin: &Address) {
@@ -85,4 +86,17 @@ pub fn get_user_stake(env: &Env, call_id: u64, staker: &Address, outcome: u32) -
         .instance()
         .get(&DataKey::UserStake(call_id, staker.clone(), outcome))
         .unwrap_or(0)
+}
+
+pub fn set_charity_whitelisted(env: &Env, charity: &Address, allowed: bool) {
+    env.storage()
+        .persistent()
+        .set(&DataKey::CharityWhitelist(charity.clone()), &allowed);
+}
+
+pub fn is_charity_whitelisted(env: &Env, charity: &Address) -> bool {
+    env.storage()
+        .persistent()
+        .get(&DataKey::CharityWhitelist(charity.clone()))
+        .unwrap_or(false)
 }

@@ -17,6 +17,29 @@ export enum EventType {
   OUTCOME_MANAGER_CHANGED = 'outcome_manager_changed',
   OUTCOME_FINALIZED = 'outcome_finalized',
   INITIALIZED = 'initialized',
+
+  // PredictionMarketFactory (BE-005)
+  MARKET_DEPLOYED = 'market_deployed',
+  STRATEGY_CREATED = 'strategy_created',
+  STRATEGY_EXECUTED = 'strategy_executed',
+  STRATEGY_CANCELLED = 'strategy_cancelled',
+
+  // Orderbook (BE-005)
+  ORDER_PLACED = 'order_placed',
+  ORDER_CANCELLED = 'order_cancelled',
+  ORDER_EXECUTED = 'order_executed',
+
+  // ParlayBetting (BE-005)
+  PARLAY_CREATED = 'parlay_created',
+  PARLAY_LEG_RESOLVED = 'parlay_leg_resolved',
+  PARLAY_COMPLETED = 'parlay_completed',
+  PARLAY_VOIDED = 'parlay_voided',
+
+  // LendingPool (BE-005)
+  LENDING_DEPOSITED = 'lending_deposited',
+  LENDING_WITHDRAWN = 'lending_withdrawn',
+  CAPITAL_ALLOCATED = 'capital_allocated',
+  YIELD_HARVESTED = 'yield_harvested',
 }
 
 /** Ledgers per `event_logs` range partition (see PartitionEventStore migration). */
@@ -40,6 +63,9 @@ export const EVENT_LOG_PARTITION_SIZE = 100_000;
   'ledger',
 ])
 @Index('IDX_event_logs_eventType_ledger', ['eventType', 'ledger'])
+@Index('UQ_event_logs_dedupeKey_ledger', ['dedupeKey', 'ledger'], {
+  unique: true,
+})
 export class EventLog {
   @PrimaryGeneratedColumn()
   id: number;
@@ -60,6 +86,16 @@ export class EventLog {
 
   @Column({ type: 'varchar', length: 50 })
   eventType: EventType;
+
+  /**
+   * Idempotency key (the Soroban event id) set by the multi-contract
+   * pipeline. Nullable on purpose: rows written by the older indexers carry
+   * NULL, and NULLs never collide in a unique index, so legacy behaviour is
+   * unchanged. The unique index includes `ledger` because PostgreSQL requires
+   * the partition key in every unique constraint of a partitioned table.
+   */
+  @Column({ type: 'varchar', length: 80, nullable: true })
+  dedupeKey?: string | null;
 
   /** Ledger sequence — the partition key. */
   @PrimaryColumn({ type: 'bigint' })

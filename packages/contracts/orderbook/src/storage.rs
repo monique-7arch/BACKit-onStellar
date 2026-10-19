@@ -1,5 +1,5 @@
 use crate::types::{Order, OrderbookConfig};
-use soroban_sdk::{contracttype, Address, Env, Map, Vec};
+use soroban_sdk::{contracttype, Address, Env, Vec};
 
 #[contracttype]
 pub enum DataKey {
@@ -9,6 +9,8 @@ pub enum DataKey {
     UserOrders(Address),
     OrderbookBids(u64, u32),
     OrderbookAsks(u64, u32),
+    Token,
+    Shares(Address, u64, u32),
 }
 
 pub fn set_config(env: &Env, config: &OrderbookConfig) {
@@ -84,4 +86,25 @@ pub fn get_book_ids(env: &Env, call_id: u64, outcome: u32, is_bid: bool) -> Vec<
         .instance()
         .get(&key)
         .unwrap_or_else(|| Vec::new(env))
+}
+
+pub fn set_token(env: &Env, token: &Address) {
+    env.storage().instance().set(&DataKey::Token, token);
+}
+
+pub fn get_token(env: &Env) -> Option<Address> {
+    env.storage().instance().get(&DataKey::Token)
+}
+
+pub fn get_shares(env: &Env, user: &Address, call_id: u64, outcome: u32) -> i128 {
+    env.storage()
+        .instance()
+        .get(&DataKey::Shares(user.clone(), call_id, outcome))
+        .unwrap_or(0)
+}
+
+pub fn set_shares(env: &Env, user: &Address, call_id: u64, outcome: u32, amount: i128) {
+    env.storage()
+        .instance()
+        .set(&DataKey::Shares(user.clone(), call_id, outcome), &amount);
 }

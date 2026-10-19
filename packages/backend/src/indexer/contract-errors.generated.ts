@@ -234,6 +234,16 @@ export const CONTRACT_ERROR_REGISTRY: Readonly<
       },
       10: { code: 10, name: 'InvalidCallId', message: 'Invalid call id.' },
       11: { code: 11, name: 'ZeroPool', message: 'Zero pool.' },
+      12: {
+        code: 12,
+        name: 'CharitySplitTooLow',
+        message: 'Charity split too low.',
+      },
+      13: {
+        code: 13,
+        name: 'CharityNotWhitelisted',
+        message: 'Charity not whitelisted.',
+      },
     },
   },
   cross_chain_oracle_relay: {
@@ -407,6 +417,28 @@ export const CONTRACT_ERROR_REGISTRY: Readonly<
       11: { code: 11, name: 'QuorumNotMet', message: 'Quorum not met.' },
       12: { code: 12, name: 'AlreadyDelegated', message: 'Already delegated.' },
       13: { code: 13, name: 'SelfDelegation', message: 'Self delegation.' },
+      30: {
+        code: 30,
+        name: 'InvalidSplit',
+        message: 'Fee split basis points do not sum to 10 000.',
+      },
+      31: {
+        code: 31,
+        name: 'NotEnoughSigners',
+        message:
+          'Fewer distinct treasury signers authorised the call than the threshold.',
+      },
+      32: { code: 32, name: 'InvalidAmount', message: 'Invalid amount.' },
+      33: {
+        code: 33,
+        name: 'InsufficientBucket',
+        message: 'The bucket holds less than the requested amount.',
+      },
+      34: {
+        code: 34,
+        name: 'InvalidTreasuryConfig',
+        message: 'Invalid treasury config.',
+      },
     },
   },
   index_fund: {
@@ -446,6 +478,7 @@ export const CONTRACT_ERROR_REGISTRY: Readonly<
         message: 'Market not resolved.',
       },
       13: { code: 13, name: 'TransferFailed', message: 'Transfer failed.' },
+      14: { code: 14, name: 'DuplicateMarket', message: 'Duplicate market.' },
     },
   },
   lending_pool: {
@@ -525,6 +558,28 @@ export const CONTRACT_ERROR_REGISTRY: Readonly<
       },
       12: { code: 12, name: 'AlreadyRated', message: 'Already rated.' },
       13: { code: 13, name: 'InvalidRating', message: 'Invalid rating.' },
+      14: {
+        code: 14,
+        name: 'OracleNotLive',
+        message:
+          'The oracle has not sent a heartbeat recently and is not routed new markets.',
+      },
+      15: {
+        code: 15,
+        name: 'AlreadyResolved',
+        message: 'A resolution was already recorded for this call.',
+      },
+      16: {
+        code: 16,
+        name: 'InsufficientBonusPool',
+        message: 'The bonus pool holds less than the bonus owed.',
+      },
+      17: {
+        code: 17,
+        name: 'BonusTokenNotSet',
+        message: 'No bonus token has been configured.',
+      },
+      18: { code: 18, name: 'InvalidAmount', message: 'Invalid amount.' },
     },
   },
   orderbook: {
@@ -552,6 +607,13 @@ export const CONTRACT_ERROR_REGISTRY: Readonly<
         name: 'MaxMatchesReached',
         message: 'Max matches reached.',
       },
+      10: { code: 10, name: 'TokenNotSet', message: 'Token not set.' },
+      11: {
+        code: 11,
+        name: 'InsufficientShares',
+        message: 'Insufficient shares.',
+      },
+      12: { code: 12, name: 'Overflow', message: 'Overflow.' },
     },
   },
   outcome_manager: {
@@ -737,6 +799,12 @@ export const CONTRACT_ERROR_REGISTRY: Readonly<
         name: 'DuplicateOracleObservation',
         message:
           'The same oracle submitted a second resolution observation for the same call_id via submit_resolution_observation.',
+      },
+      33: {
+        code: 33,
+        name: 'ReplayedSubmission',
+        message:
+          'This exact signed outcome was already accepted by this deployment. Unlike DuplicateSubmission (temporary storage, can expire) this record is permanent.',
       },
     },
   },
@@ -982,6 +1050,18 @@ export const CONTRACT_ERROR_REGISTRY: Readonly<
         message: 'Transfer not allowed.',
       },
       6: { code: 6, name: 'InvalidBadgeType', message: 'Invalid badge type.' },
+      7: {
+        code: 7,
+        name: 'NonTransferable',
+        message:
+          'Badges are soulbound: transfer and transfer_from always fail with this.',
+      },
+      8: { code: 8, name: 'BadgeNotFound', message: 'Badge not found.' },
+      9: {
+        code: 9,
+        name: 'InvalidTier',
+        message: 'Tier must be between 1 and 5.',
+      },
     },
   },
   schelling_oracle: {
@@ -1111,6 +1191,26 @@ export const CONTRACT_ERROR_REGISTRY: Readonly<
         name: 'ParticipantNotFound',
         message: 'Participant not found.',
       },
+      14: { code: 14, name: 'BracketNotFound', message: 'Bracket not found.' },
+      15: {
+        code: 15,
+        name: 'BracketAlreadyExists',
+        message: 'Bracket already exists.',
+      },
+      16: { code: 16, name: 'BracketLocked', message: 'Bracket locked.' },
+      17: {
+        code: 17,
+        name: 'BracketAlreadySubmitted',
+        message: 'Bracket already submitted.',
+      },
+      18: { code: 18, name: 'InvalidBracket', message: 'Invalid bracket.' },
+      19: { code: 19, name: 'RoundOutOfOrder', message: 'Round out of order.' },
+      20: {
+        code: 20,
+        name: 'NotAllRoundsResolved',
+        message: 'Not all rounds resolved.',
+      },
+      21: { code: 21, name: 'TooManyEntrants', message: 'Too many entrants.' },
     },
   },
   yield_aggregator: {

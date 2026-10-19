@@ -14,6 +14,11 @@ import {
   ApiResponse,
 } from '@nestjs/swagger';
 import { ShutdownService } from './shutdown.service';
+import { IndexerLeaseService } from '../indexer/indexer-lease.service';
+import {
+  CHECKPOINT_MULTI_CONTRACT,
+  LedgerCheckpointService,
+} from '../indexer/ledger-checkpoint.service';
 
 @ApiTags('health')
 @Controller({ path: 'health', version: VERSION_NEUTRAL })
@@ -24,6 +29,8 @@ export class HealthController {
     private readonly dataSource: DataSource,
     private readonly httpService: HttpService,
     private readonly shutdownService: ShutdownService,
+    private readonly indexerLease: IndexerLeaseService,
+    private readonly ledgerCheckpoints: LedgerCheckpointService,
   ) {
     this.rpcUrl =
       process.env.STELLAR_RPC_URL ?? 'https://soroban-testnet.stellar.org';
@@ -61,11 +68,11 @@ export class HealthController {
     },
   })
   async check() {
-    const [database, stellar_rpc, memory_heap_mb] = await Promise.all([
+    const [database, stellar_rpc] = await Promise.all([
       this.checkDatabase(),
       this.checkStellarRpc(),
-      this.checkMemory(),
     ]);
+    const memory_heap_mb = this.checkMemory();
 
     const status =
       database === 'connected' && stellar_rpc === 'reachable' ? 'ok' : 'error';
@@ -102,6 +109,76 @@ export class HealthController {
       throw new ServiceUnavailableException({ status: 'shutting_down' });
     }
     return { status: 'ready' };
+  }
+
+  @Get('indexer')
+  @ApiOperation({
+    summary: 'Indexer leadership and checkpoint status',
+    description:
+      'Reports whether this node is the indexer leader or a standby, who holds the Redis lease, ' +
+      'and the last committed ledger checkpoint. A standby is healthy: it returns 200. ' +
+      'Returns 503 only when Redis (the lease store) is unreachable.',
+  })
+  @ApiOkResponse({
+    description: 'Indexer coordination is working',
+    schema: {
+      example: {
+        status: 'ok',
+        role: 'standby',
+        nodeId: 'indexer-1',
+        leaseHolder: 'indexer-0',
+        leaseTtlRemainingMs: 7400,
+        leaderless: false,
+        checkpoint: {
+          name: 'multi-contract',
+          lastLedger: 1234567,
+          ownerId: 'indexer-0',
+          updatedAt: '2024-01-26T10:30:00.000Z',
+        },
+        timestamp: '2024-01-26T10:30:00.000Z',
+      },
+    },
+  })
+  @ApiResponse({ status: 503, description: 'Redis lease store unreachable' })
+  async indexer() {
+    const [cluster, checkpoint] = await Promise.all([
+      this.indexerLease.getCluster(),
+      this.ledgerCheckpoints
+        .getStatus(CHECKPOINT_MULTI_CONTRACT)
+        .then((value) => ({ value, error: null as string | null }))
+        .catch((err: Error) => ({ value: null, error: err.message })),
+    ]);
+    const lease = this.indexerLease.getStatus();
+
+    const payload = {
+      status:
+        cluster.redis === 'unreachable'
+          ? 'error'
+          : checkpoint.error
+            ? 'degraded'
+            : 'ok',
+      role: lease.isLeader ? 'leader' : 'standby',
+      nodeId: lease.nodeId,
+      leaseDisabled: lease.leaseDisabled,
+      redis: cluster.redis,
+      leaseHolder: cluster.holder,
+      leaseTtlRemainingMs: cluster.ttlRemainingMs,
+      // No holder while Redis is up means a failover is in progress (or no
+      // node is running the indexer). Informational, not a failure.
+      leaderless: cluster.redis === 'connected' && cluster.holder === null,
+      leaseExpiresAt: lease.expiresAt
+        ? new Date(lease.expiresAt).toISOString()
+        : null,
+      transitions: lease.transitions,
+      checkpoint: checkpoint.value,
+      checkpointError: checkpoint.error,
+      timestamp: new Date().toISOString(),
+    };
+
+    if (payload.status === 'error') {
+      throw new ServiceUnavailableException(payload);
+    }
+    return payload;
   }
 
   // ─── Private Checks ───────────────────────────────────────────────────────

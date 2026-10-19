@@ -17,4 +17,5 @@ pub enum IndexFundError {
     IndexFull = 11,
     MarketNotResolved = 12,
     TransferFailed = 13,
+    DuplicateMarket = 14,
 }

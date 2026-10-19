@@ -19,6 +19,8 @@ import { AdminGuard } from '../auth/guards/admin.guard';
 import { AdminService } from './admin.service';
 import { QueryAdminCallsDto } from './dto/query-admin-calls.dto';
 import { ActionReportDto } from './dto/action-report.dto';
+import { IndexerDlqService } from './indexer-dlq.service';
+import { ListIndexerDlqDto, RetryIndexerDlqDto } from './dto/indexer-dlq.dto';
 import { Audited } from '../audit/decorators/audited.decorator';
 import { AuditActionType } from '../audit/audit-log.entity';
 
@@ -27,7 +29,10 @@ import { AuditActionType } from '../audit/audit-log.entity';
 @UseGuards(AdminGuard)
 @Controller('admin')
 export class AdminController {
-  constructor(private readonly adminService: AdminService) {}
+  constructor(
+    private readonly adminService: AdminService,
+    private readonly indexerDlq: IndexerDlqService,
+  ) {}
 
   // ─── Calls ────────────────────────────────────────────────────────────────
 
@@ -151,5 +156,42 @@ export class AdminController {
   })
   getStats() {
     return this.adminService.getStats();
+  }
+
+  // ─── Indexer dead-letter queue ────────────────────────────────────────────
+
+  @Get('indexer/dlq/list')
+  @ApiOperation({
+    summary: 'List indexer events that exhausted their retries',
+    description:
+      'Each entry carries the raw event XDR, the failure stage, the error and its full stack trace.',
+  })
+  @ApiOkResponse({ description: 'Paginated dead-lettered indexer events' })
+  listIndexerDlq(@Query() query: ListIndexerDlqDto) {
+    return this.indexerDlq.list(query.limit, query.offset);
+  }
+
+  @Get('indexer/dlq/:id')
+  @ApiOperation({ summary: 'Inspect one dead-lettered indexer event' })
+  @ApiParam({ name: 'id', type: String, description: 'Soroban event id' })
+  getIndexerDlqEntry(@Param('id') id: string) {
+    return this.indexerDlq.get(id);
+  }
+
+  @Post('indexer/dlq/retry')
+  @ApiOperation({
+    summary: 'Re-drive dead-lettered indexer events',
+    description:
+      'Pass ids (up to 100) or all=true (oldest 500). A single id may carry a patch to edit the raw ' +
+      'topic, value or contract id first. Re-driving is idempotent on the event id.',
+  })
+  @Audited(AuditActionType.ADMIN_ACTION, (ctx) => {
+    const body = ctx
+      .switchToHttp()
+      .getRequest<{ body?: { ids?: string[]; all?: boolean } }>().body;
+    return `indexer-dlq:${body?.all ? 'all' : (body?.ids ?? []).join(',')}`;
+  })
+  retryIndexerDlq(@Body() body: RetryIndexerDlqDto) {
+    return this.indexerDlq.retry(body);
   }
 }

@@ -21,7 +21,51 @@ pub struct MockToken;
 
 #[contractimpl]
 impl MockToken {
+    /// Tracks balances so the registry's balance-delta accounting sees real movement.
+    pub fn transfer(env: Env, from: Address, to: Address, amount: i128) {
+        let from_balance: i128 = env.storage().instance().get(&from).unwrap_or(0);
+        env.storage().instance().set(&from, &(from_balance - amount));
+        let to_balance: i128 = env.storage().instance().get(&to).unwrap_or(0);
+        env.storage().instance().set(&to, &(to_balance + amount));
+    }
+
+    pub fn balance(env: Env, id: Address) -> i128 {
+        env.storage().instance().get(&id).unwrap_or(0)
+    }
+}
+
+/// Fee-on-transfer token: the recipient receives `amount - amount * fee_bps / 10_000`
+/// (fee_bps is stored; 0 means the transfer delivers nothing when `deliver_nothing`).
+#[contract]
+pub struct FeeToken;
+
+#[contractimpl]
+impl FeeToken {
+    /// 10% is burned on every transfer.
+    pub fn transfer(env: Env, from: Address, to: Address, amount: i128) {
+        let from_balance: i128 = env.storage().instance().get(&from).unwrap_or(0);
+        env.storage().instance().set(&from, &(from_balance - amount));
+        let received = amount - amount / 10;
+        let to_balance: i128 = env.storage().instance().get(&to).unwrap_or(0);
+        env.storage().instance().set(&to, &(to_balance + received));
+    }
+
+    pub fn balance(env: Env, id: Address) -> i128 {
+        env.storage().instance().get(&id).unwrap_or(0)
+    }
+}
+
+/// A token whose transfer succeeds but moves nothing.
+#[contract]
+pub struct ZeroDeltaToken;
+
+#[contractimpl]
+impl ZeroDeltaToken {
     pub fn transfer(_env: Env, _from: Address, _to: Address, _amount: i128) {}
+
+    pub fn balance(_env: Env, _id: Address) -> i128 {
+        0
+    }
 }
 
 // ── Test module ───────────────────────────────────────────────────────────────

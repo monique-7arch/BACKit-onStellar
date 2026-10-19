@@ -13,4 +13,7 @@ pub enum OrderbookError {
     InsufficientBalance = 7,
     SelfTrading = 8,
     MaxMatchesReached = 9,
+    TokenNotSet = 10,
+    InsufficientShares = 11,
+    Overflow = 12,
 }

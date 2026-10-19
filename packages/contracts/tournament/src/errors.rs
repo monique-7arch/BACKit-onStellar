@@ -17,4 +17,12 @@ pub enum TournamentError {
     InvalidPrizePool = 11,
     InvalidTopN = 12,
     ParticipantNotFound = 13,
+    BracketNotFound = 14,
+    BracketAlreadyExists = 15,
+    BracketLocked = 16,
+    BracketAlreadySubmitted = 17,
+    InvalidBracket = 18,
+    RoundOutOfOrder = 19,
+    NotAllRoundsResolved = 20,
+    TooManyEntrants = 21,
 }

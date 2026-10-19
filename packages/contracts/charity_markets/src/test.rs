@@ -35,31 +35,33 @@ fn make_params(env: &Env, stake_amount: i128, creator_outcome: u32) -> CharityCa
 }
 
 #[test]
-fn test_creator_wins_no_donation() {
+fn test_creator_wins_minimum_donation() {
     let env = Env::default();
     env.mock_all_auths();
 
     let (client, _admin, _om, _stake_token, sac) = deploy(&env);
     let creator = Address::generate(&env);
     let charity = Address::generate(&env);
+    client.set_charity_whitelisted(&charity, &true);
 
     sac.mint(&creator, &1000);
 
     let params = make_params(&env, 100, 1);
-    let call_id = client.create_charity_call(&creator, &params, &charity, &0);
+    let call_id = client.create_charity_call(&creator, &params, &charity, &100);
 
     let (info_charity, info_split, info_donated) = client.get_charity_info(&call_id);
     assert_eq!(info_charity, charity);
-    assert_eq!(info_split, 0);
+    assert_eq!(info_split, 100);
     assert_eq!(info_donated, 0);
 
     client.resolve_charity_call(&call_id, &1);
 
-    assert_eq!(sac.balance(&creator), 900 + 100);
-    assert_eq!(sac.balance(&charity), 0);
+    // The 1% minimum routes 1 of the 100 payout to the charity.
+    assert_eq!(sac.balance(&creator), 900 + 99);
+    assert_eq!(sac.balance(&charity), 1);
 
     let (_, _, info_donated) = client.get_charity_info(&call_id);
-    assert_eq!(info_donated, 0);
+    assert_eq!(info_donated, 1);
 }
 
 #[test]
@@ -70,11 +72,12 @@ fn test_creator_loses_donation_triggers() {
     let (client, _admin, _om, _stake_token, sac) = deploy(&env);
     let creator = Address::generate(&env);
     let charity = Address::generate(&env);
+    client.set_charity_whitelisted(&charity, &true);
 
     sac.mint(&creator, &1000);
 
     let params = make_params(&env, 100, 1);
-    let call_id = client.create_charity_call(&creator, &params, &charity, &0);
+    let call_id = client.create_charity_call(&creator, &params, &charity, &100);
 
     client.resolve_charity_call(&call_id, &2);
 
@@ -93,6 +96,7 @@ fn test_creator_wins_partial_charity_split() {
     let (client, _admin, _om, _stake_token, sac) = deploy(&env);
     let creator = Address::generate(&env);
     let charity = Address::generate(&env);
+    client.set_charity_whitelisted(&charity, &true);
 
     sac.mint(&creator, &1000);
 
@@ -125,6 +129,7 @@ fn test_charity_split_exceeds_max() {
     let (client, _admin, _om, _stake_token, sac) = deploy(&env);
     let creator = Address::generate(&env);
     let charity = Address::generate(&env);
+    client.set_charity_whitelisted(&charity, &true);
 
     sac.mint(&creator, &1000);
 
@@ -141,11 +146,12 @@ fn test_create_charity_call_zero_stake_fails() {
     let (client, _admin, _om, _stake_token, sac) = deploy(&env);
     let creator = Address::generate(&env);
     let charity = Address::generate(&env);
+    client.set_charity_whitelisted(&charity, &true);
 
     sac.mint(&creator, &1000);
 
     let params = make_params(&env, 0, 1);
-    let result = client.try_create_charity_call(&creator, &params, &charity, &0);
+    let result = client.try_create_charity_call(&creator, &params, &charity, &100);
     assert!(result.is_err());
 }
 
@@ -157,14 +163,42 @@ fn test_double_resolve_fails() {
     let (client, _admin, _om, _stake_token, sac) = deploy(&env);
     let creator = Address::generate(&env);
     let charity = Address::generate(&env);
+    client.set_charity_whitelisted(&charity, &true);
 
     sac.mint(&creator, &1000);
 
     let params = make_params(&env, 100, 1);
-    let call_id = client.create_charity_call(&creator, &params, &charity, &0);
+    let call_id = client.create_charity_call(&creator, &params, &charity, &100);
 
     client.resolve_charity_call(&call_id, &1);
 
     let result = client.try_resolve_charity_call(&call_id, &1);
     assert!(result.is_err());
+}
+
+#[test]
+fn test_only_whitelisted_charities_with_min_one_percent_split() {
+    use crate::errors::CharityError;
+    let env = Env::default();
+    env.mock_all_auths();
+
+    let (client, _admin, _om, _stake_token, sac) = deploy(&env);
+    let creator = Address::generate(&env);
+    let charity = Address::generate(&env);
+    sac.mint(&creator, &1000);
+    let params = make_params(&env, 100, 1);
+
+    let r = client.try_create_charity_call(&creator, &params, &charity, &100);
+    assert_eq!(r, Err(Ok(CharityError::CharityNotWhitelisted)));
+
+    client.set_charity_whitelisted(&charity, &true);
+    assert!(client.is_charity_whitelisted(&charity));
+    let r = client.try_create_charity_call(&creator, &params, &charity, &99);
+    assert_eq!(r, Err(Ok(CharityError::CharitySplitTooLow)));
+    client.create_charity_call(&creator, &params, &charity, &100);
+
+    // The admin can remove it again.
+    client.set_charity_whitelisted(&charity, &false);
+    let r = client.try_create_charity_call(&creator, &params, &charity, &100);
+    assert_eq!(r, Err(Ok(CharityError::CharityNotWhitelisted)));
 }

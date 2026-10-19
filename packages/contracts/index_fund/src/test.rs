@@ -200,3 +200,85 @@ fn test_initialize_fee_too_high() {
     let fund = IndexFundClient::new(&env, &contract_id);
     fund.initialize(&admin, &stake_token, &factory, &3600, &5000, &50);
 }
+
+// ── Basket investing and settlement ──────────────────────────────────────────
+
+fn token_bal(env: &Env, token: &Address, who: &Address) -> i128 {
+    soroban_sdk::token::Client::new(env, token).balance(who)
+}
+
+#[test]
+fn mint_and_redeem_index_round_trip() {
+    let (env, admin, stake_token, factory) = create_test_env();
+    let fund = setup_fund(&env, &admin, &stake_token, &factory);
+    let user = Address::generate(&env);
+    mint_tokens(&env, &stake_token, &user, 1_000);
+
+    let shares = fund.mint_index(&user, &1_000);
+    assert_eq!(fund.get_user_balance(&user), shares);
+    // 0.5% fee on the way in and out.
+    let out = fund.redeem_index(&user, &shares);
+    assert_eq!(out, 995 - 995 * 50 / 10_000);
+    assert_eq!(fund.get_user_balance(&user), 0);
+}
+
+#[test]
+fn winning_market_raises_nav_and_balances_stay_exact() {
+    let (env, admin, stake_token, factory) = create_test_env();
+    let fund = setup_fund(&env, &admin, &stake_token, &factory);
+    let user = Address::generate(&env);
+    let market = Address::generate(&env);
+    mint_tokens(&env, &stake_token, &user, 1_000);
+    mint_tokens(&env, &stake_token, &market, 1_000); // market's own funds to pay out
+
+    fund.mint_index(&user, &1_000); // pool: 995 after fee
+    let aum0 = fund.get_index_performance().total_aum;
+    fund.invest(&1, &market, &1, &500);
+    assert_eq!(fund.get_index_performance().total_aum, aum0); // valued at cost
+    assert_eq!(fund.get_index_composition().len(), 1);
+
+    fund.claim_payout(&1, &800); // position won: 500 -> 800
+    assert_eq!(fund.get_index_performance().total_aum, aum0 + 300);
+    assert_eq!(fund.get_index_composition().len(), 0);
+    // Pool accounting matches real holdings (995 + 300 gain + 5 fee kept).
+    assert_eq!(token_bal(&env, &stake_token, &fund.address), 995 + 300 + 5);
+    assert_eq!(fund.get_index_performance().total_aum, 995 + 300);
+
+    // A later depositor now gets fewer shares per USDC than the first one.
+    let late = Address::generate(&env);
+    mint_tokens(&env, &stake_token, &late, 1_000);
+    assert!(fund.mint_index(&late, &1_000) < fund.get_user_balance(&user));
+}
+
+#[test]
+fn losing_market_lowers_nav_and_staked_capital_cannot_be_redeemed() {
+    let (env, admin, stake_token, factory) = create_test_env();
+    let fund = setup_fund(&env, &admin, &stake_token, &factory);
+    let user = Address::generate(&env);
+    let market = Address::generate(&env);
+    mint_tokens(&env, &stake_token, &user, 1_000);
+
+    let shares = fund.mint_index(&user, &1_000);
+    fund.invest(&1, &market, &1, &900);
+
+    // Only 95 liquid: redeeming everything must fail while capital is staked.
+    assert!(fund.try_redeem_index(&user, &shares).is_err());
+
+    fund.claim_payout(&1, &0);
+    assert_eq!(fund.get_index_performance().total_aum, 95);
+    assert_eq!(fund.get_index_composition().len(), 0);
+}
+
+#[test]
+fn invest_rejects_duplicates_and_overspending() {
+    let (env, admin, stake_token, factory) = create_test_env();
+    let fund = setup_fund(&env, &admin, &stake_token, &factory);
+    let user = Address::generate(&env);
+    let market = Address::generate(&env);
+    mint_tokens(&env, &stake_token, &user, 1_000);
+    fund.mint_index(&user, &1_000);
+
+    assert!(fund.try_invest(&1, &market, &1, &996).is_err()); // > 995 liquid
+    fund.invest(&1, &market, &1, &500);
+    assert!(fund.try_invest(&1, &market, &1, &100).is_err()); // duplicate call id
+}

@@ -1,6 +1,10 @@
 /** @type {import('next').NextConfig} */
 const nextConfig = {
-  // App Router is enabled by default in Next.js 13.4+
+  reactStrictMode: true,
+  swcMinify: true,
+  images: {
+    domains: [],
+  },
 }
 
 module.exports = nextConfig

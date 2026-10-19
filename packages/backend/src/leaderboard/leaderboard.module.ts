@@ -2,6 +2,7 @@ import { Module } from '@nestjs/common';
 import { TypeOrmModule } from '@nestjs/typeorm';
 import { ConfigModule } from '@nestjs/config';
 import { PredictionCall, LeaderboardSnapshot } from './leaderboard.entity';
+import { RedisLeaderboardService } from './redis-leaderboard.service';
 import { LeaderboardService } from './leaderboard.service';
 import { LeaderboardController } from './leaderboard.controller';
 import { LeaderboardCacheService } from './leaderboard-cache.service';
@@ -17,9 +18,10 @@ import { LeaderboardSyncService } from './leaderboard-sync.service';
   providers: [
     LeaderboardService,
     LeaderboardCacheService,
+    RedisLeaderboardService,
     LeaderboardEventListener,
     LeaderboardSyncService,
   ],
-  exports: [LeaderboardService, LeaderboardCacheService],
+  exports: [LeaderboardService, LeaderboardCacheService, RedisLeaderboardService],
 })
 export class LeaderboardModule {}

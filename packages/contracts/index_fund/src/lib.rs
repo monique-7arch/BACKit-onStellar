@@ -53,6 +53,15 @@ fn compute_nav(env: &Env) -> Result<i128, IndexFundError> {
         .ok_or(IndexFundError::NavCalculationError)?)
 }
 
+/// USDC currently staked in basket markets (at cost).
+fn invested_total(env: &Env) -> i128 {
+    let mut total = 0i128;
+    for c in get_constituents(env).iter() {
+        total += c.stake_amount;
+    }
+    total
+}
+
 // ─── Contract ────────────────────────────────────────────────────────────────
 
 #[contract]
@@ -166,6 +175,11 @@ impl IndexFund {
             .checked_div(total_supply)
             .ok_or(IndexFundError::NavCalculationError)?;
 
+        // Capital staked in basket markets is not available until it is claimed.
+        if usdc_out > total_usdc - invested_total(&env) {
+            soroban_sdk::panic_with_error!(&env, IndexFundError::InsufficientLiquidity);
+        }
+
         let fee = calculate_fee(usdc_out, config.withdraw_fee_bps);
         let net_usdc = usdc_out
             .checked_sub(fee)
@@ -245,44 +259,92 @@ impl IndexFund {
         Ok(())
     }
 
-    /// Claim payout from a resolved market and add USDC back to the pool.
-    pub fn claim_payout(env: Env, call_id: u64) -> Result<i128, IndexFundError> {
-        let _config = get_config(&env).ok_or(IndexFundError::NotInitialized)?;
-
-        let constituent = get_constituent(&env, call_id).ok_or(IndexFundError::MarketNotFound)?;
-
-        // In production, cross-contract call to prediction_market.release_escrow
-        // or to the outcome_manager to claim.  For the on-chain token flow we
-        // accept the payout amount that is transferred to this contract and
-        // update accounting accordingly.
-
-        // The payout amount should be the stake_amount * multiplier for the
-        // winning outcome.  For simplicity the caller must ensure the funds
-        // have already been sent to this contract via the prediction market
-        // release_escrow path, and we record the amount.
-
-        let payout_amount = constituent.stake_amount; // Simplified: 1:1 payout
-
-        // Add payout to pool
-        let total_usdc = get_total_usdc_in_pool(&env);
-        set_total_usdc_in_pool(&env, total_usdc + payout_amount);
-
-        // Remove constituent
-        remove_constituent(&env, call_id);
-
-        // Update constituents list
+    /// Stake `amount` of pool USDC into a basket market (admin only). The
+    /// capital leaves the contract but still counts toward NAV at cost until
+    /// the market pays out.
+    pub fn invest(
+        env: Env,
+        call_id: u64,
+        market_address: Address,
+        outcome: u32,
+        amount: i128,
+    ) -> Result<(), IndexFundError> {
+        let config = get_config(&env).ok_or(IndexFundError::NotInitialized)?;
+        config.admin.require_auth();
+        if amount <= 0 {
+            soroban_sdk::panic_with_error!(&env, IndexFundError::InvalidAmount);
+        }
         let mut constituents = get_constituents(&env);
+        if constituents.len() >= config.top_n {
+            soroban_sdk::panic_with_error!(&env, IndexFundError::IndexFull);
+        }
+        if get_constituent(&env, call_id).is_some() {
+            soroban_sdk::panic_with_error!(&env, IndexFundError::DuplicateMarket);
+        }
+        if amount > get_total_usdc_in_pool(&env) - invested_total(&env) {
+            soroban_sdk::panic_with_error!(&env, IndexFundError::InsufficientLiquidity);
+        }
+
+        transfer_token(&env, &config.stake_token, &env.current_contract_address(), &market_address, amount);
+        let c = IndexConstituent {
+            call_id,
+            weight_bps: 0,
+            stake_amount: amount,
+            outcome,
+            market_address,
+        };
+        set_constituent(&env, &c);
+        constituents.push_back(c);
+        set_constituents(&env, &constituents);
+        Ok(())
+    }
+
+    /// Settle a basket market: the market pays `payout` (possibly 0 for a
+    /// losing position) back into the fund and authorises it. The pool is
+    /// re-marked from cost to the actual payout, so NAV only ever reflects
+    /// USDC the contract really holds.
+    pub fn claim_payout(env: Env, call_id: u64, payout: i128) -> Result<i128, IndexFundError> {
+        let config = get_config(&env).ok_or(IndexFundError::NotInitialized)?;
+        let constituent = get_constituent(&env, call_id).ok_or(IndexFundError::MarketNotFound)?;
+        constituent.market_address.require_auth();
+        if payout < 0 {
+            soroban_sdk::panic_with_error!(&env, IndexFundError::InvalidAmount);
+        }
+
+        if payout > 0 {
+            transfer_token(
+                &env,
+                &config.stake_token,
+                &constituent.market_address,
+                &env.current_contract_address(),
+                payout,
+            );
+        }
+        let total_usdc = get_total_usdc_in_pool(&env) - constituent.stake_amount + payout;
+        set_total_usdc_in_pool(&env, total_usdc);
+
+        remove_constituent(&env, call_id);
+        let constituents = get_constituents(&env);
         let mut new_list: Vec<IndexConstituent> = Vec::new(&env);
-        for i in 0..constituents.len() {
-            let c = constituents.get(i).unwrap();
+        for c in constituents.iter() {
             if c.call_id != call_id {
                 new_list.push_back(c);
             }
         }
         set_constituents(&env, &new_list);
 
-        emit_payout_claimed(&env, call_id, payout_amount);
-        Ok(payout_amount)
+        emit_payout_claimed(&env, call_id, payout);
+        Ok(payout)
+    }
+
+    /// Mint index shares for `amount` USDC at the current NAV.
+    pub fn mint_index(env: Env, user: Address, amount: i128) -> Result<i128, IndexFundError> {
+        Self::deposit(env, user, amount)
+    }
+
+    /// Redeem index shares for their pro-rata share of liquid USDC.
+    pub fn redeem_index(env: Env, user: Address, shares: i128) -> Result<i128, IndexFundError> {
+        Self::withdraw(env, user, shares)
     }
 
     // ─── Read-only getters ───────────────────────────────────────────────

@@ -416,3 +416,157 @@ fn test_paginated_standings() {
     let page2 = te.get_tournament_standings(tid, 2);
     assert_eq!(page2.len(), 0);
 }
+
+// ── Bracket contest ──────────────────────────────────────────────────────────
+
+mod bracket_tests {
+    extern crate std;
+
+    use crate::errors::TournamentError;
+    use crate::{TournamentContract, TournamentContractClient};
+    use soroban_sdk::testutils::{Address as _, Ledger};
+    use soroban_sdk::token::{Client as TokenClient, StellarAssetClient};
+    use soroban_sdk::{Address, Env, Vec};
+
+    fn e(x: TournamentError) -> soroban_sdk::Error {
+        soroban_sdk::Error::from_contract_error(x as u32)
+    }
+
+    struct B<'a> {
+        env: Env,
+        client: TournamentContractClient<'a>,
+        token: Address,
+    }
+
+    fn setup<'a>() -> B<'a> {
+        let env = Env::default();
+        env.mock_all_auths();
+        let admin = Address::generate(&env);
+        let id = env.register(TournamentContract, ());
+        let client = TournamentContractClient::new(&env, &id);
+        client.initialize(&admin, &Address::generate(&env));
+        let token = env.register_stellar_asset_contract_v2(admin).address();
+        client.init_bracket(&1, &token, &100, &1_000);
+        B { env, client, token }
+    }
+
+    fn player(b: &B) -> Address {
+        let p = Address::generate(&b.env);
+        StellarAssetClient::new(&b.env, &b.token).mint(&p, &1_000);
+        p
+    }
+
+    fn v(b: &B, xs: &[u32]) -> Vec<u32> {
+        Vec::from_slice(&b.env, xs)
+    }
+
+    /// Lower seed always wins; `champ` swaps the final pick.
+    fn picks(b: &B, champ: u32) -> Vec<u32> {
+        v(b, &[0, 2, 4, 6, 8, 10, 12, 14, 0, 4, 8, 12, 0, 8, champ])
+    }
+
+    fn resolve_all(b: &B) {
+        b.client.resolve_round(&1, &v(b, &[0, 2, 4, 6, 8, 10, 12, 14]));
+        b.client.resolve_round(&1, &v(b, &[0, 4, 8, 12]));
+        b.client.resolve_round(&1, &v(b, &[0, 8]));
+        b.client.resolve_round(&1, &v(b, &[0]));
+    }
+
+    fn bal(b: &B, who: &Address) -> i128 {
+        TokenClient::new(&b.env, &b.token).balance(who)
+    }
+
+    #[test]
+    fn perfect_bracket_scores_every_round() {
+        let b = setup();
+        let p = player(&b);
+        b.client.submit_bracket(&p, &1, &picks(&b, 0));
+        b.client.resolve_round(&1, &v(&b, &[0, 2, 4, 6, 8, 10, 12, 14]));
+        assert_eq!(b.client.bracket_score(&1, &p), 8);
+        b.client.resolve_round(&1, &v(&b, &[0, 4, 8, 12]));
+        assert_eq!(b.client.bracket_score(&1, &p), 16);
+        b.client.resolve_round(&1, &v(&b, &[0, 8]));
+        b.client.resolve_round(&1, &v(&b, &[0]));
+        assert_eq!(b.client.bracket_score(&1, &p), 8 + 8 + 8 + 8);
+    }
+
+    #[test]
+    fn inconsistent_or_malformed_brackets_are_rejected() {
+        let b = setup();
+        let p = player(&b);
+        // QF pick of team 1, who the entrant had losing in the round of 16.
+        let bad = v(&b, &[0, 2, 4, 6, 8, 10, 12, 14, 1, 4, 8, 12, 0, 8, 0]);
+        assert_eq!(b.client.try_submit_bracket(&p, &1, &bad), Err(Ok(e(TournamentError::InvalidBracket))));
+        assert_eq!(
+            b.client.try_submit_bracket(&p, &1, &v(&b, &[0, 2])),
+            Err(Ok(e(TournamentError::InvalidBracket)))
+        );
+        b.client.submit_bracket(&p, &1, &picks(&b, 0));
+        assert_eq!(
+            b.client.try_submit_bracket(&p, &1, &picks(&b, 0)),
+            Err(Ok(e(TournamentError::BracketAlreadySubmitted)))
+        );
+    }
+
+    #[test]
+    fn entries_close_at_lock_time_and_rounds_resolve_in_order() {
+        let b = setup();
+        let p = player(&b);
+        assert_eq!(
+            b.client.try_resolve_round(&1, &v(&b, &[0, 4, 8, 12])),
+            Err(Ok(e(TournamentError::InvalidBracket)))
+        );
+        b.env.ledger().with_mut(|l| l.timestamp = 1_000);
+        assert_eq!(
+            b.client.try_submit_bracket(&p, &1, &picks(&b, 0)),
+            Err(Ok(e(TournamentError::BracketLocked)))
+        );
+    }
+
+    #[test]
+    fn prize_pool_splits_50_30_20_with_no_dust_and_fair_tiebreaks() {
+        let b = setup();
+        let (p1, p2, p3, p4) = (player(&b), player(&b), player(&b), player(&b));
+        // p1 and p2 are both perfect: p1 submitted first, so p1 ranks higher.
+        b.client.submit_bracket(&p1, &1, &picks(&b, 0));
+        b.client.submit_bracket(&p2, &1, &picks(&b, 0));
+        // p3 only misses the final; p4 picks a wrong champion and R16 upset.
+        b.client.submit_bracket(&p3, &1, &picks(&b, 8));
+        b.client.submit_bracket(&p4, &1, &v(&b, &[1, 2, 4, 6, 8, 10, 12, 14, 1, 4, 8, 12, 1, 8, 8]));
+        assert_eq!(b.client.get_bracket_pool(&1), 400);
+        assert_eq!(
+            b.client.try_finalize_bracket(&1),
+            Err(Ok(e(TournamentError::NotAllRoundsResolved)))
+        );
+
+        resolve_all(&b);
+        b.client.finalize_bracket(&1);
+
+        // Pool 400: 200 / 120 / 80, nothing to the fourth entrant.
+        assert_eq!(bal(&b, &p1), 900 + 200);
+        assert_eq!(bal(&b, &p2), 900 + 120);
+        assert_eq!(bal(&b, &p3), 900 + 80);
+        assert_eq!(bal(&b, &p4), 900);
+        assert_eq!(bal(&b, &b.client.address), 0);
+        assert_eq!(
+            b.client.try_finalize_bracket(&1),
+            Err(Ok(e(TournamentError::TournamentAlreadyFinalized)))
+        );
+    }
+
+    #[test]
+    fn rounding_dust_goes_to_first_place() {
+        let b = setup();
+        // Entry fee 100 with 3 entrants => pool 300: 150/90/60, no dust; use 1 entrant
+        // and 2 entrants to exercise renormalisation instead.
+        let (p1, p2) = (player(&b), player(&b));
+        b.client.submit_bracket(&p1, &1, &picks(&b, 0));
+        b.client.submit_bracket(&p2, &1, &picks(&b, 8));
+        resolve_all(&b);
+        b.client.finalize_bracket(&1);
+        // 50/80 and 30/80 of 200 = 125 and 75.
+        assert_eq!(bal(&b, &p1), 900 + 125);
+        assert_eq!(bal(&b, &p2), 900 + 75);
+        assert_eq!(bal(&b, &b.client.address), 0);
+    }
+}
